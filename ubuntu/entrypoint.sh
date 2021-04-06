@@ -1,5 +1,8 @@
 #!/bin/bash -x
 
+
+VENDOR=0x15b3
+
 function set_driver_readiness() {
     touch /.driver-ready
 }
@@ -80,6 +83,45 @@ function unload_modules() {
     done
 }
 
+function find_mlx_devs() {
+    local ethpath
+    for ethpath in /sys/class/net/*; do
+        if (grep $VENDOR "$ethpath"/device/vendor >/dev/null 2>&1); then
+            echo "$ethpath"
+        fi
+    done
+}
+
+function find_mlx_pfs() {
+    for mlnx_dev in $(find_mlx_devs); do
+        if [[ ! -L $mlnx_dev/device/physfn ]]; then
+            pf_name=$(basename "$mlnx_dev") && [[ -n $pf_name ]] || return 1
+            echo "$pf_name"
+        fi
+    done
+}
+
+function set_link_up() {
+    local pf_name=$1
+    ip link set dev "$pf_name" up
+}
+
+function set_pf_links_up() {
+    local pf_data
+    if ! pf_data=$(find_mlx_pfs); then
+        echo "Failed to read info about PFs"
+        return 1
+    fi
+    local pf
+    for pf in $pf_data;do
+        echo "set $pf link up"
+        if ! set_link_up "$pf"; then
+            echo "failed to set PF $pf_name up"
+            return 1
+        fi
+    done
+}
+
 # Unset driver readiness in case it was set in a previous run of this container
 # and container was killed
 unset_driver_readiness
@@ -91,6 +133,7 @@ fi
 unload_modules rpcrdma rdma_cm
 exit_on_error start_driver
 mount_rootfs
+set_pf_links_up
 set_driver_readiness
 trap "echo 'Caught signal'; exit 1" HUP INT QUIT PIPE TERM
 trap "handle_signal" EXIT
